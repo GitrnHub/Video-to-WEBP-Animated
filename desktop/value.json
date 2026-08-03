@@ -1,0 +1,16 @@
+{
+  "ffmpeg_path": "C:\\APP\\AI\\FFmpeg",
+  "max_input_size_mb": 50,
+  "fps": 12,
+  "max_edge": 720,
+  "allow_upscale": false,
+  "quality": 75,
+  "compression_level": 4,
+  "lossless": false,
+  "loop": 0,
+  "fps_round": "near",
+  "pixel_format": "yuv420p",
+  "scale_algorithm": "lanczos",
+  "overwrite_output": true,
+  "extra_ffmpeg_args": []
+}

@@ -1,0 +1,12 @@
+上传方法（你当前的 GitHub Pages 已设置为 main /docs）：
+
+1. 先把本 ZIP 压缩包解压到电脑。
+2. 打开解压后的文件夹。
+3. 在 GitHub 仓库首页点击 Add file -> Upload files。
+4. 把解压后看到的 docs、desktop 文件夹，以及 README.md、THIRD_PARTY_NOTICES.md、UPLOAD_INSTRUCTIONS.txt 一起拖入上传区域。
+5. 注意：不要把最外层文件夹再套一层上传；仓库根目录必须直接看到 docs 文件夹。
+6. 填写提交说明，例如：Add responsive WebP converter。
+7. 点击 Commit changes。
+8. 等待 Actions 中 pages build and deployment 变成绿色对勾，然后刷新网页。
+
+不要直接上传 ZIP 文件。GitHub Pages 不会自动解压 ZIP，直接上传后网页不会更新。

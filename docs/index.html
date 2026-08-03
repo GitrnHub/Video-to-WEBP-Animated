@@ -2,39 +2,248 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>视频转 WebP 动图工具</title>
-  <style>
-    body {
-      max-width: 800px;
-      margin: 60px auto;
-      padding: 0 24px;
-      font-family: Arial, "Microsoft YaHei", sans-serif;
-      line-height: 1.7;
-    }
-
-    h1 {
-      font-size: 32px;
-    }
-
-    .status {
-      padding: 16px;
-      border: 1px solid #ccc;
-      border-radius: 10px;
-      background: #f7f7f7;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0f17">
+  <meta name="description" content="在浏览器本地将图片转换为静态 WebP，将视频转换为 WebP 动图。文件不会上传到服务器。">
+  <title>图片 / 视频转 WebP</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <h1>视频转 WebP 动图工具</h1>
+  <div class="ambient ambient-a" aria-hidden="true"></div>
+  <div class="ambient ambient-b" aria-hidden="true"></div>
 
-  <div class="status">
-    GitHub Pages 部署成功。正式转换功能正在开发中。
-  </div>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="返回首页">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M7 5.5A2.5 2.5 0 0 1 9.5 3h5A2.5 2.5 0 0 1 17 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 1 7 18.5z"/><path class="play" d="m10.5 8.3 5.2 3.7-5.2 3.7z"/></svg>
+      </span>
+      <span>
+        <strong>WebP Studio</strong>
+        <small>本地转换，不上传文件</small>
+      </span>
+    </a>
+    <div class="header-actions">
+      <span class="privacy-pill"><span class="pulse"></span>浏览器本地处理</span>
+      <button id="themeButton" class="icon-button" type="button" aria-label="切换明暗主题" title="切换明暗主题">
+        <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon" viewBox="0 0 24 24"><path d="M20.5 14.5A8 8 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"/></svg>
+      </button>
+    </div>
+  </header>
 
-  <p>
-    未来将在浏览器本地使用 FFmpeg WebAssembly 完成转换，
-    视频无需上传到服务器。
-  </p>
+  <main class="page-shell">
+    <section class="hero">
+      <div class="eyebrow"><span></span> IMAGE & VIDEO CONVERTER</div>
+      <h1>图片转静态 WebP<br><em>视频转 WebP 动图</em></h1>
+      <p>自动识别文件类型。图片使用浏览器原生编码快速转换；视频使用 FFmpeg WebAssembly 在本机完成处理。</p>
+      <div class="hero-notes" aria-label="功能特点">
+        <span><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>不上传服务器</span>
+        <span><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg>手机与电脑兼容</span>
+        <span><svg viewBox="0 0 24 24"><path d="M4 7h16M7 4v16M17 4v16M4 17h16"/></svg>自适应高清屏幕</span>
+      </div>
+    </section>
+
+    <section class="app-grid" aria-label="WebP 转换工具">
+      <div class="main-column">
+        <article class="card upload-card">
+          <div class="card-heading">
+            <div>
+              <span class="step-number">01</span>
+              <h2>选择文件</h2>
+            </div>
+            <span id="modeBadge" class="mode-badge is-empty">等待文件</span>
+          </div>
+
+          <input id="fileInput" class="visually-hidden" type="file" accept="image/*,video/*,.mkv,.avi,.mov,.m4v,.webm,.mp4,.mpeg,.mpg,.ts,.tif,.tiff,.bmp">
+          <label id="dropZone" class="drop-zone" for="fileInput" tabindex="0">
+            <span class="upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+            </span>
+            <strong>拖放图片或视频到这里</strong>
+            <span>或者点击选择文件</span>
+            <small>最大 50 MiB · 常见图片和视频格式</small>
+          </label>
+
+          <div id="filePanel" class="file-panel" hidden>
+            <div id="sourcePreview" class="source-preview"></div>
+            <div class="file-details">
+              <div class="file-name-row">
+                <strong id="fileName">—</strong>
+                <button id="removeFileButton" class="text-button" type="button">移除</button>
+              </div>
+              <div class="metadata-grid">
+                <span><small>类型</small><b id="fileType">—</b></span>
+                <span><small>大小</small><b id="fileSize">—</b></span>
+                <span><small>尺寸</small><b id="fileDimensions">读取中</b></span>
+                <span><small>输出</small><b id="outputMode">自动判断</b></span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article id="progressCard" class="card progress-card" hidden>
+          <div class="card-heading compact">
+            <div>
+              <span class="step-number">03</span>
+              <h2>转换进度</h2>
+            </div>
+            <span id="progressPercent" class="progress-percent">0%</span>
+          </div>
+          <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+          <div class="progress-copy">
+            <strong id="progressTitle">准备中</strong>
+            <span id="progressDetail">等待处理</span>
+          </div>
+          <button id="cancelButton" class="secondary-button danger" type="button">取消转换</button>
+          <details class="log-details">
+            <summary>查看技术日志</summary>
+            <pre id="logOutput"></pre>
+          </details>
+        </article>
+
+        <article id="resultCard" class="card result-card" hidden>
+          <div class="card-heading">
+            <div>
+              <span class="step-number success">✓</span>
+              <h2>转换完成</h2>
+            </div>
+            <span class="success-badge">WebP 已生成</span>
+          </div>
+          <div class="result-layout">
+            <div id="resultPreview" class="result-preview"></div>
+            <div class="result-info">
+              <strong id="resultName">output.webp</strong>
+              <div class="size-comparison">
+                <span><small>原文件</small><b id="originalSize">—</b></span>
+                <span class="arrow">→</span>
+                <span><small>WebP</small><b id="resultSize">—</b></span>
+              </div>
+              <p id="savingText">文件已在浏览器中生成。</p>
+              <a id="downloadButton" class="primary-button download-button" download>
+                <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+                下载 WebP
+              </a>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <aside class="side-column">
+        <article class="card settings-card">
+          <div class="card-heading">
+            <div>
+              <span class="step-number">02</span>
+              <h2>转换设置</h2>
+            </div>
+            <button id="resetSettingsButton" class="text-button" type="button">恢复默认</button>
+          </div>
+
+          <div class="setting-group">
+            <label for="maxEdge">最长边</label>
+            <select id="maxEdge">
+              <option value="480">480 px</option>
+              <option value="720" selected>720 px（默认）</option>
+              <option value="1080">1080 px</option>
+              <option value="1440">1440 px</option>
+              <option value="2160">2160 px</option>
+              <option value="0">保持原尺寸</option>
+            </select>
+            <p>按原比例缩放，默认不放大小尺寸文件。</p>
+          </div>
+
+          <div class="setting-group range-group">
+            <div class="label-row">
+              <label for="quality">质量</label>
+              <output id="qualityValue" for="quality">75</output>
+            </div>
+            <input id="quality" type="range" min="1" max="100" value="75">
+            <div class="range-labels"><span>更小</span><span>更清晰</span></div>
+          </div>
+
+          <div class="setting-row">
+            <div>
+              <label for="allowUpscale">允许放大</label>
+              <p>小图片或视频可放大到最长边设置。</p>
+            </div>
+            <label class="switch"><input id="allowUpscale" type="checkbox"><span></span></label>
+          </div>
+
+          <div class="setting-row">
+            <div>
+              <label for="lossless">无损 WebP</label>
+              <p>体积会明显增大；图片也会改用 FFmpeg。</p>
+            </div>
+            <label class="switch"><input id="lossless" type="checkbox"><span></span></label>
+          </div>
+
+          <div id="videoSettings" class="video-settings">
+            <div class="section-divider"><span>视频动图设置</span></div>
+            <div class="two-column-settings">
+              <div class="setting-group">
+                <label for="fps">帧率</label>
+                <select id="fps">
+                  <option value="6">6 FPS</option>
+                  <option value="8">8 FPS</option>
+                  <option value="10">10 FPS</option>
+                  <option value="12" selected>12 FPS</option>
+                  <option value="15">15 FPS</option>
+                  <option value="20">20 FPS</option>
+                  <option value="24">24 FPS</option>
+                </select>
+              </div>
+              <div class="setting-group">
+                <label for="loop">循环</label>
+                <select id="loop">
+                  <option value="0" selected>无限循环</option>
+                  <option value="1">播放 1 次</option>
+                  <option value="2">播放 2 次</option>
+                  <option value="3">播放 3 次</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="advanced-settings">
+            <details>
+              <summary>高级设置</summary>
+              <div class="setting-group range-group">
+                <div class="label-row">
+                  <label for="compression">压缩级别</label>
+                  <output id="compressionValue" for="compression">4</output>
+                </div>
+                <input id="compression" type="range" min="0" max="6" value="4">
+                <div class="range-labels"><span>更快</span><span>更小</span></div>
+              </div>
+              <p class="advanced-note">较高压缩级别会增加处理时间。缩放算法固定为 Lanczos。</p>
+            </details>
+          </div>
+
+          <button id="convertButton" class="primary-button convert-button" type="button" disabled>
+            <span id="convertButtonText">请先选择文件</span>
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+          </button>
+          <p id="engineHint" class="engine-hint">图片将使用浏览器原生编码，无需下载 FFmpeg 核心。</p>
+        </article>
+
+        <article class="card info-card">
+          <div class="info-icon"><svg viewBox="0 0 24 24"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z"/><path d="M12 10v6M12 7h.01"/></svg></div>
+          <div>
+            <strong>隐私说明</strong>
+            <p>输入和输出文件只存在于当前浏览器内存中，不会上传到本站或 GitHub。关闭页面后临时数据会被释放。</p>
+          </div>
+        </article>
+      </aside>
+    </section>
+  </main>
+
+  <footer>
+    <span>Powered by browser WebP encoder & FFmpeg WebAssembly</span>
+    <span>·</span>
+    <a href="https://github.com/ffmpegwasm/ffmpeg.wasm" target="_blank" rel="noreferrer">ffmpeg.wasm</a>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
