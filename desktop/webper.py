@@ -258,13 +258,14 @@ def build_filter(config: Config) -> str:
 
     return ",".join(
         (
-            f"fps=fps={_number_text(config.fps)}:round={config.fps_round}",
+            f"fps={_number_text(config.fps)}:round={config.fps_round}",
             (
                 f"scale=w='{scale_width}':h='{scale_height}':"
                 "force_original_aspect_ratio=decrease:"
-                "force_divisible_by=2:reset_sar=1:"
+                "force_divisible_by=2:"
                 f"flags={config.scale_algorithm}"
             ),
+            "setsar=1/1",
             f"format=pix_fmts={config.pixel_format}",
         )
     )

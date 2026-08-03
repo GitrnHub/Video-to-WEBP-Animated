@@ -16,7 +16,8 @@ const elements = {
   outputMode: $("#outputMode"), modeBadge: $("#modeBadge"), removeFileButton: $("#removeFileButton"),
   maxEdge: $("#maxEdge"), quality: $("#quality"), qualityValue: $("#qualityValue"), allowUpscale: $("#allowUpscale"),
   lossless: $("#lossless"), fps: $("#fps"), loop: $("#loop"), compression: $("#compression"),
-  compressionValue: $("#compressionValue"), videoSettings: $("#videoSettings"), resetSettingsButton: $("#resetSettingsButton"),
+  compressionValue: $("#compressionValue"), imageSettings: $("#imageSettings"), videoSettings: $("#videoSettings"),
+  settingsEmpty: $("#settingsEmpty"), settingsContent: $("#settingsContent"), resetSettingsButton: $("#resetSettingsButton"),
   convertButton: $("#convertButton"), convertButtonText: $("#convertButtonText"), engineHint: $("#engineHint"),
   progressCard: $("#progressCard"), progressPercent: $("#progressPercent"), progressBar: $("#progressBar"),
   progressTitle: $("#progressTitle"), progressDetail: $("#progressDetail"), cancelButton: $("#cancelButton"), logOutput: $("#logOutput"),
@@ -155,9 +156,13 @@ function appendLog(message) {
 
 function settings() {
   return {
-    maxEdge: Number(elements.maxEdge.value), quality: Number(elements.quality.value),
-    allowUpscale: elements.allowUpscale.checked, lossless: elements.lossless.checked,
-    fps: Number(elements.fps.value), loop: Number(elements.loop.value), compression: Number(elements.compression.value),
+    maxEdge: Number(elements.maxEdge.value),
+    quality: Number(elements.quality.value),
+    allowUpscale: elements.allowUpscale.checked,
+    lossless: state.kind === "image" && elements.lossless.checked,
+    fps: Number(elements.fps.value),
+    loop: Number(elements.loop.value),
+    compression: Number(elements.compression.value),
   };
 }
 
@@ -191,24 +196,36 @@ function updateSettingLabels() {
   elements.compressionValue.textContent = elements.compression.value;
 }
 
+function updateModeSettings() {
+  const hasFile = Boolean(state.file && state.kind);
+  elements.settingsEmpty.hidden = hasFile;
+  elements.settingsContent.hidden = !hasFile;
+  elements.imageSettings.hidden = state.kind !== "image";
+  elements.videoSettings.hidden = state.kind !== "video";
+  elements.resetSettingsButton.disabled = state.processing || !hasFile;
+}
+
 function updateEngineHint() {
-  if (state.kind === "video") {
-    elements.engineHint.textContent = "首次转换视频时会下载约 31 MiB 的 FFmpeg 核心，之后浏览器可复用缓存。";
-  } else if (state.kind === "image" && elements.lossless.checked) {
-    elements.engineHint.textContent = "无损图片将使用 FFmpeg 编码，因此首次转换需下载约 31 MiB 核心。";
+  if (!state.file) {
+    elements.engineHint.textContent = "";
+  } else if (state.kind === "video") {
+    elements.engineHint.textContent = "首次转换视频时需加载约 31 MiB 的 FFmpeg 核心。";
+  } else if (elements.lossless.checked) {
+    elements.engineHint.textContent = "无损图片首次转换时需加载 FFmpeg 核心。";
   } else {
-    elements.engineHint.textContent = "图片将使用浏览器原生编码，无需下载 FFmpeg 核心。";
+    elements.engineHint.textContent = "图片将转换为单帧静态 WebP。";
   }
 }
 
 function setBusy(busy) {
   state.processing = busy;
-  for (const control of [elements.fileInput, elements.maxEdge, elements.quality, elements.allowUpscale, elements.lossless, elements.fps, elements.loop, elements.compression, elements.resetSettingsButton, elements.removeFileButton]) {
+  for (const control of [elements.fileInput, elements.maxEdge, elements.quality, elements.allowUpscale, elements.lossless, elements.fps, elements.loop, elements.compression, elements.removeFileButton]) {
     control.disabled = busy;
   }
+  elements.resetSettingsButton.disabled = busy || !state.file;
   elements.convertButton.disabled = busy || !state.file;
   elements.cancelButton.disabled = !busy;
-  elements.convertButtonText.textContent = busy ? "正在转换…" : state.file ? (state.kind === "image" ? "转换为静态 WebP" : "转换为 WebP 动图") : "请先选择文件";
+  elements.convertButtonText.textContent = busy ? "正在转换…" : state.file ? (state.kind === "image" ? "转换静态 WebP" : "转换 WebP 动图") : "请先选择文件";
 }
 
 function clearResult() {
@@ -232,9 +249,9 @@ function clearFile() {
   elements.sourcePreview.innerHTML = "";
   elements.modeBadge.className = "mode-badge is-empty";
   elements.modeBadge.textContent = "等待文件";
-  elements.videoSettings.hidden = false;
   elements.progressCard.hidden = true;
   clearResult();
+  updateModeSettings();
   setBusy(false);
   updateEngineHint();
 }
@@ -275,8 +292,8 @@ async function handleFile(file) {
   elements.fileSize.textContent = formatBytes(file.size);
   elements.outputMode.textContent = kind === "image" ? "静态 WebP" : "WebP 动图";
   elements.modeBadge.className = `mode-badge is-${kind}`;
-  elements.modeBadge.textContent = kind === "image" ? "图片 → 静态 WebP" : "视频 → WebP 动图";
-  elements.videoSettings.hidden = kind !== "video";
+  elements.modeBadge.textContent = kind === "image" ? "静态 WebP" : "WebP 动图";
+  updateModeSettings();
 
   const preview = document.createElement(kind === "image" ? "img" : "video");
   preview.src = state.sourceURL;
@@ -342,7 +359,8 @@ function buildScaleFilter(options, includePixelFormat) {
   if (options.maxEdge > 0) {
     const width = options.allowUpscale ? String(options.maxEdge) : `min(iw\\,${options.maxEdge})`;
     const height = options.allowUpscale ? String(options.maxEdge) : `min(ih\\,${options.maxEdge})`;
-    filters.push(`scale=w='${width}':h='${height}':force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1:flags=lanczos`);
+    filters.push(`scale=w='${width}':h='${height}':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos`);
+    filters.push("setsar=1/1");
   }
   if (includePixelFormat) filters.push("format=pix_fmts=yuv420p");
   return filters.join(",");
@@ -416,7 +434,7 @@ async function convertWithFFmpeg(file, kind, options) {
 
   let args;
   if (kind === "video") {
-    const filter = [`fps=fps=${options.fps}:round=near`, buildScaleFilter(options, true)].filter(Boolean).join(",");
+    const filter = [`fps=${options.fps}:round=near`, buildScaleFilter(options, true)].filter(Boolean).join(",");
     args = [
       "-nostdin", "-y", "-hide_banner", "-i", inputPath, "-map", "0:v:0", "-an", "-sn", "-dn",
       "-vf", filter, "-fps_mode", "passthrough", "-c:v", "libwebp_anim",
@@ -454,7 +472,7 @@ function showResult(blob) {
   elements.originalSize.textContent = formatBytes(state.file.size);
   elements.resultSize.textContent = formatBytes(blob.size);
   const ratio = state.file.size ? ((blob.size / state.file.size - 1) * 100) : 0;
-  elements.savingText.textContent = ratio <= 0 ? `体积减少 ${Math.abs(ratio).toFixed(1)}%。文件仅在本地生成。` : `输出体积增加 ${ratio.toFixed(1)}%。可降低质量、尺寸或帧率。`;
+  elements.savingText.textContent = ratio <= 0 ? `体积减少 ${Math.abs(ratio).toFixed(1)}%。` : `输出体积增加 ${ratio.toFixed(1)}%。可降低画质、尺寸或帧率。`;
   elements.downloadButton.href = state.resultURL;
   elements.downloadButton.download = name;
   elements.resultCard.hidden = false;
@@ -547,4 +565,5 @@ window.addEventListener("beforeunload", () => {
 
 initializeTheme();
 loadSettings();
+updateModeSettings();
 setBusy(false);
