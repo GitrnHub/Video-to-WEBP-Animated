@@ -20,86 +20,75 @@ jobs:
         with:
           ref: x-video-transfer-test
 
-      - name: Install gallery-dl
+      - name: Install downloader
         run: |
           python -m pip install --upgrade pip gallery-dl requests
           gallery-dl --version | tee gallery-dl-version.txt
 
-      - name: Enumerate X embed timeline and download media
+      - name: Enumerate Nitter timeline and download X media
         id: download
         continue-on-error: true
         shell: bash
         run: |
           set +e
-          rm -rf downloads
-          mkdir -p downloads/ylslnm
+          rm -rf downloads nitter-pages
+          mkdir -p downloads/ylslnm nitter-pages
 
-          cat > enumerate_timeline.py <<'PY'
-          import json, random, re, time
+          cat > enumerate_nitter.py <<'PY'
+          import json, re, sys
           from pathlib import Path
           import requests
 
           handle = 'ylslnm'
-          callback = f'__twttr.callbacks.tl_i0_profile_{handle}_old'
-          params = {
-              'callback': callback,
-              'dnt': 'true',
-              'domain': f'embed-{random.randint(100000,999999)}.example.com',
-              'lang': 'en',
-              'screen_name': handle,
-              'suppress_response_codes': 'true',
-              't': str(int(time.time())),
-              'tz': 'GMT-0100',
-              'with_replies': 'false',
-          }
+          candidates = [
+              'https://nitter.us.catsarch.com',
+              'https://nitter.net',
+              'https://nitter.poast.org',
+              'https://xcancel.com',
+              'https://nitter.holo-mix.com',
+          ]
           headers = {
               'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36',
-              'Accept': '*/*',
-              'Referer': 'https://platform.twitter.com/',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           }
-          url = 'https://cdn.syndication.twimg.com/timeline/profile'
-          r = requests.get(url, params=params, headers=headers, timeout=90)
-          Path('old-timeline-status.txt').write_text(
-              f'HTTP {r.status_code}\nbytes={len(r.content)}\ncontent_type={r.headers.get("content-type", "")}\nfinal_url={r.url}\n',
-              encoding='utf-8')
-          Path('old-timeline-response.txt').write_text(r.text, encoding='utf-8', errors='replace')
-          r.raise_for_status()
-          text = r.text.strip()
-          m = re.match(r'^[^(]+\((.*)\)\s*;?\s*$', text, re.S)
-          if not m:
-              raise RuntimeError('JSONP wrapper not recognized')
-          payload = json.loads(m.group(1))
-          body = payload.get('body') or ''
-          Path('old-timeline-body.html').write_text(body, encoding='utf-8', errors='replace')
+          s = requests.Session()
+          s.headers.update(headers)
           ids = []
           seen = set()
-          patterns = [
-              rf'/{re.escape(handle)}/status/(\d+)',
-              r'data-tweet-id=["\'](\d+)["\']',
-              r'data-item-id=["\'](\d+)["\']',
-              r'/i/web/status/(\d+)',
-          ]
-          for pattern in patterns:
-              for tid in re.findall(pattern, body, re.I):
-                  if tid not in seen:
-                      seen.add(tid)
-                      ids.append(tid)
-          ids = ids[:20]
+          attempts = []
+          selected = None
+          for idx, base in enumerate(candidates):
+              url = f'{base}/{handle}'
+              try:
+                  r = s.get(url, timeout=60, allow_redirects=True)
+                  text = r.text
+                  Path(f'nitter-pages/{idx}.html').write_text(text, encoding='utf-8', errors='replace')
+                  found = re.findall(rf'/{re.escape(handle)}/status/(\d+)', text, re.I)
+                  found += re.findall(r'/i/status/(\d+)', text, re.I)
+                  local=[]
+                  local_seen=set()
+                  for tid in found:
+                      if tid not in local_seen:
+                          local_seen.add(tid); local.append(tid)
+                  attempts.append({'base':base,'status':r.status_code,'bytes':len(r.content),'ids':len(local),'final_url':r.url})
+                  if r.status_code == 200 and local:
+                      selected = base
+                      for tid in local:
+                          if tid not in seen:
+                              seen.add(tid); ids.append(tid)
+                          if len(ids) >= 20:
+                              break
+                      break
+              except Exception as e:
+                  attempts.append({'base':base,'error':repr(e)})
+          Path('nitter-attempts.json').write_text(json.dumps({'selected':selected,'attempts':attempts,'ids':ids}, ensure_ascii=False, indent=2), encoding='utf-8')
           Path('status-ids.txt').write_text('\n'.join(ids) + ('\n' if ids else ''), encoding='utf-8')
-          summary = {
-              'http_status': r.status_code,
-              'payload_keys': sorted(payload.keys()),
-              'body_bytes': len(body.encode('utf-8')),
-              'status_count': len(ids),
-              'status_ids': ids,
-          }
-          Path('old-timeline-summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
-          print(json.dumps(summary, ensure_ascii=False))
+          print(json.dumps({'selected':selected,'status_count':len(ids),'attempts':attempts}, ensure_ascii=False))
           if not ids:
-              raise SystemExit(30)
+              sys.exit(30)
           PY
 
-          python enumerate_timeline.py > enumerate.log 2>&1
+          python enumerate_nitter.py > enumerate.log 2>&1
           ENUM_RC=$?
 
           cat > gallery-dl.conf <<'JSON'
@@ -133,36 +122,22 @@ jobs:
               gallery-dl --verbose --no-input --config gallery-dl.conf --write-metadata \
                 "https://x.com/i/web/status/$ID" >> gallery-dl.log 2>&1
               RC=$?
-              if [ "$RC" -ne 0 ]; then
-                ITEM_FAILURES=$((ITEM_FAILURES + 1))
-              fi
+              [ "$RC" -eq 0 ] || ITEM_FAILURES=$((ITEM_FAILURES + 1))
             done < status-ids.txt
           fi
 
-          STATUS_COUNT=$(wc -l < status-ids.txt 2>/dev/null | tr -d ' ')
-          STATUS_COUNT=${STATUS_COUNT:-0}
+          STATUS_COUNT=$(wc -l < status-ids.txt 2>/dev/null | tr -d ' '); STATUS_COUNT=${STATUS_COUNT:-0}
           COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
           TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
           find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
 
-          if [ "$ENUM_RC" -ne 0 ]; then
-            FINAL_RC=$ENUM_RC
-          elif [ "$COUNT" -eq 0 ]; then
-            FINAL_RC=31
-          else
-            FINAL_RC=0
-          fi
-
-          echo "enum_rc=$ENUM_RC" >> "$GITHUB_ENV"
+          if [ "$ENUM_RC" -ne 0 ]; then FINAL_RC=$ENUM_RC; elif [ "$COUNT" -eq 0 ]; then FINAL_RC=31; else FINAL_RC=0; fi
           echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV"
           echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV"
           echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV"
           echo "media_files=$COUNT" >> "$GITHUB_ENV"
           echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
-
-          cat old-timeline-status.txt 2>/dev/null || true
-          cat old-timeline-summary.json 2>/dev/null || true
-          tail -n 100 enumerate.log 2>/dev/null || true
+          cat nitter-attempts.json 2>/dev/null || true
           tail -n 160 gallery-dl.log 2>/dev/null || true
           cat batch-manifest.txt 2>/dev/null || true
           exit "$FINAL_RC"
@@ -172,15 +147,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: x-profile-ylslnm-cdn-timeline
+          name: x-profile-ylslnm-nitter-index
           path: |
             downloads/
             batch-manifest.txt
             status-ids.txt
-            old-timeline-status.txt
-            old-timeline-summary.json
-            old-timeline-response.txt
-            old-timeline-body.html
+            nitter-attempts.json
             enumerate.log
             gallery-dl.log
             gallery-dl-version.txt
@@ -197,7 +169,7 @@ jobs:
           DL_OUTCOME: ${{ steps.download.outcome }}
         run: |
           set -euo pipefail
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "cdn-syndication-jsonp-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-cdn-timeline"\n}\n' \
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "nitter-index-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-nitter-index"\n}\n' \
             '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" \
             "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" \
             "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
