@@ -1,14 +1,12 @@
 {
-  "run_id": 32262673226,
-  "artifact_id": 9368878475,
-  "artifact_url": "https://github.com/GitrnHub/Video-to-WEBP-Animated/actions/runs/32262673226/artifacts/9368878475",
+  "run_id": 32262814584,
+  "artifact_id": 9368928996,
+  "artifact_url": "https://github.com/GitrnHub/Video-to-WEBP-Animated/actions/runs/32262814584/artifacts/9368928996",
   "source_profile": "https://x.com/ylslnm",
-  "method": "public-index-plus-TweetResultByRestId",
-  "status_count": 0,
-  "item_failures": 0,
+  "method": "syndication-profile",
   "download_outcome": "failure",
-  "download_exit_code": 30,
+  "download_exit_code": 1,
   "media_files": 0,
   "total_media_bytes": 0,
-  "artifact_name": "x-profile-ylslnm-latest20-indexed"
+  "artifact_name": "x-profile-ylslnm-syndication"
 }
