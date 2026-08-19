@@ -13,7 +13,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - name: Check out transfer branch
         uses: actions/checkout@v4
@@ -25,62 +25,54 @@ jobs:
           python -m pip install --upgrade pip gallery-dl requests
           gallery-dl --version | tee gallery-dl-version.txt
 
-      - name: Enumerate Nitter RSS and download X media
+      - name: Enumerate Piclur and download X media
         id: download
         continue-on-error: true
         shell: bash
         run: |
           set +e
-          rm -rf downloads nitter-pages
-          mkdir -p downloads/ylslnm nitter-pages
+          rm -rf downloads index-pages
+          mkdir -p downloads/ylslnm index-pages
 
-          cat > enumerate_nitter.py <<'PY'
-          import json, re, sys
+          cat > enumerate_public.py <<'PY'
+          import json,re,sys
           from pathlib import Path
           import requests
-
           handle='ylslnm'
-          candidates=[
-            'https://lightbrd.com','https://nitter.space','https://nitter.us.catsarch.com',
-            'https://nitter.privacyredirect.com','https://nitter.tiekoetter.com','https://nuku.trabun.org',
-            'https://nitter.kareem.one','https://xcancel.com','https://nitter.poast.org','https://nitter.net'
+          urls=[
+            f'https://piclur.com/profile/{handle}',
+            f'https://piclur.com/search/{handle}',
+            f'https://twstalker.com/{handle}',
+            f'https://site.twstalker.com/{handle}',
+            f'https://instalker.org/{handle}',
           ]
-          paths=[f'/{handle}/rss',f'/{handle}/media',f'/{handle}']
-          headers={'User-Agent':'Mozilla/5.0 (compatible; feed-reader/1.0; +https://github.com/)','Accept':'application/rss+xml,application/xml,text/xml,text/html;q=0.8,*/*;q=0.5'}
-          s=requests.Session(); s.headers.update(headers)
-          ids=[]; seen=set(); attempts=[]; selected=None; file_idx=0
-          for base in candidates:
-            for path in paths:
-              url=base+path
-              try:
-                r=s.get(url,timeout=25,allow_redirects=True)
-                text=r.text
-                Path(f'nitter-pages/{file_idx}.txt').write_text(text,encoding='utf-8',errors='replace'); file_idx+=1
-                found=re.findall(rf'/{re.escape(handle)}/status/(\d+)',text,re.I)
-                found+=re.findall(r'/i/status/(\d+)',text,re.I)
-                local=[]; local_seen=set()
-                for tid in found:
-                  if tid not in local_seen: local_seen.add(tid); local.append(tid)
-                title=''
-                mt=re.search(r'<title[^>]*>(.*?)</title>',text,re.I|re.S)
-                if mt: title=re.sub(r'\s+',' ',mt.group(1)).strip()[:160]
-                attempts.append({'base':base,'path':path,'status':r.status_code,'bytes':len(r.content),'ids':len(local),'content_type':r.headers.get('content-type',''),'title':title,'final_url':r.url})
-                if r.status_code==200 and local:
-                  selected=url
-                  for tid in local:
-                    if tid not in seen: seen.add(tid); ids.append(tid)
-                    if len(ids)>=20: break
-                  if ids: break
-              except Exception as e:
-                attempts.append({'base':base,'path':path,'error':repr(e)})
-            if ids: break
-          Path('nitter-attempts.json').write_text(json.dumps({'selected':selected,'attempts':attempts,'ids':ids},ensure_ascii=False,indent=2),encoding='utf-8')
+          s=requests.Session(); s.headers.update({'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36','Accept':'text/html,application/xhtml+xml,*/*;q=0.8'})
+          ids=[];seen=set();attempts=[];selected=None
+          for idx,url in enumerate(urls):
+            try:
+              r=s.get(url,timeout=40,allow_redirects=True); text=r.text
+              Path(f'index-pages/{idx}.html').write_text(text,encoding='utf-8',errors='replace')
+              patterns=[rf'(?:https?://(?:www\.)?(?:x|twitter)\.com)?/{re.escape(handle)}/status/(\d+)',rf'/{re.escape(handle)}/status/(\d+)',r'/status/(\d{15,})',r'data-tweet-id=["\'](\d+)["\']']
+              local=[];ls=set()
+              for p in patterns:
+                for tid in re.findall(p,text,re.I):
+                  if tid not in ls: ls.add(tid);local.append(tid)
+              title='';m=re.search(r'<title[^>]*>(.*?)</title>',text,re.I|re.S)
+              if m:title=re.sub(r'\s+',' ',m.group(1)).strip()[:160]
+              attempts.append({'url':url,'status':r.status_code,'bytes':len(r.content),'ids':len(local),'title':title,'final_url':r.url})
+              if r.status_code==200 and local:
+                selected=url
+                for tid in local:
+                  if tid not in seen:seen.add(tid);ids.append(tid)
+                  if len(ids)>=20:break
+                break
+            except Exception as e:attempts.append({'url':url,'error':repr(e)})
+          Path('index-attempts.json').write_text(json.dumps({'selected':selected,'attempts':attempts,'ids':ids},ensure_ascii=False,indent=2),encoding='utf-8')
           Path('status-ids.txt').write_text('\n'.join(ids)+('\n' if ids else ''),encoding='utf-8')
           print(json.dumps({'selected':selected,'status_count':len(ids),'attempts':attempts},ensure_ascii=False))
-          if not ids: sys.exit(30)
+          if not ids:sys.exit(30)
           PY
-
-          python enumerate_nitter.py > enumerate.log 2>&1
+          python enumerate_public.py > enumerate.log 2>&1
           ENUM_RC=$?
 
           cat > gallery-dl.conf <<'JSON'
@@ -104,9 +96,7 @@ jobs:
             }
           }
           JSON
-
-          ITEM_FAILURES=0
-          : > gallery-dl.log
+          ITEM_FAILURES=0; : > gallery-dl.log
           if [ "$ENUM_RC" -eq 0 ]; then
             while IFS= read -r ID; do
               [ -n "$ID" ] || continue
@@ -115,15 +105,13 @@ jobs:
               RC=$?; [ "$RC" -eq 0 ] || ITEM_FAILURES=$((ITEM_FAILURES+1))
             done < status-ids.txt
           fi
-
-          STATUS_COUNT=$(wc -l < status-ids.txt 2>/dev/null | tr -d ' '); STATUS_COUNT=${STATUS_COUNT:-0}
+          STATUS_COUNT=$(wc -l < status-ids.txt 2>/dev/null | tr -d ' ');STATUS_COUNT=${STATUS_COUNT:-0}
           COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
           TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
           find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
-          if [ "$ENUM_RC" -ne 0 ]; then FINAL_RC=$ENUM_RC; elif [ "$COUNT" -eq 0 ]; then FINAL_RC=31; else FINAL_RC=0; fi
-          echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV"; echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV"
-          echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV"; echo "media_files=$COUNT" >> "$GITHUB_ENV"; echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
-          cat nitter-attempts.json 2>/dev/null || true; tail -n 160 gallery-dl.log 2>/dev/null || true; cat batch-manifest.txt 2>/dev/null || true
+          if [ "$ENUM_RC" -ne 0 ];then FINAL_RC=$ENUM_RC;elif [ "$COUNT" -eq 0 ];then FINAL_RC=31;else FINAL_RC=0;fi
+          echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV";echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV";echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV";echo "media_files=$COUNT" >> "$GITHUB_ENV";echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
+          cat index-attempts.json 2>/dev/null || true;tail -n 160 gallery-dl.log 2>/dev/null || true;cat batch-manifest.txt 2>/dev/null || true
           exit "$FINAL_RC"
 
       - name: Upload batch artifact and diagnostics
@@ -131,13 +119,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: x-profile-ylslnm-rss-index
+          name: x-profile-ylslnm-public-index
           path: |
             downloads/
-            nitter-pages/
+            index-pages/
             batch-manifest.txt
             status-ids.txt
-            nitter-attempts.json
+            index-attempts.json
             enumerate.log
             gallery-dl.log
             gallery-dl-version.txt
@@ -154,7 +142,5 @@ jobs:
           DL_OUTCOME: ${{ steps.download.outcome }}
         run: |
           set -euo pipefail
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "nitter-rss-index-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-rss-index"\n}\n' \
-            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
-          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add x-transfer-result.json; git commit -m 'Record X profile batch transfer metadata' || true; git push origin HEAD:x-video-transfer-test
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "public-viewer-index-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-public-index"\n}\n' '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git add x-transfer-result.json;git commit -m 'Record X profile batch transfer metadata' || true;git push origin HEAD:x-video-transfer-test
