@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - x-video-transfer-test
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -20,19 +17,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          URL='https://video.twimg.com/amplify_video/2089826090034634752/vid/avc1/2160x3840/pWYZ6PcgPx-I76Sd.mp4'
+          URL='https://video.twimg.com/amplify_video/2089615748977328128/vid/avc1/1080x1920/g6_SC6bOevPNQ_pR.mp4'
+          OUT='x-video-2089615748977328128.mp4'
           curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 \
             --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36' \
-            --output x-video.mp4 "$URL"
-          test -s x-video.mp4
-          file x-video.mp4
-          sha256sum x-video.mp4
-          ls -lh x-video.mp4
+            --output "$OUT" "$URL"
+          test -s "$OUT"
+          file "$OUT"
+          sha256sum "$OUT"
+          ls -lh "$OUT"
 
       - name: Upload video artifact
         uses: actions/upload-artifact@v7
         with:
-          name: x-video-transfer-test
-          path: x-video.mp4
+          name: x-video-2089615748977328128
+          path: x-video-2089615748977328128.mp4
           if-no-files-found: error
           retention-days: 1
