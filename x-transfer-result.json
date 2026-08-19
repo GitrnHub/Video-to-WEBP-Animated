@@ -1,14 +1,14 @@
 {
-  "run_id": 32264185188,
-  "artifact_id": 9369480772,
-  "artifact_url": "https://github.com/GitrnHub/Video-to-WEBP-Animated/actions/runs/32264185188/artifacts/9369480772",
+  "run_id": 32264336289,
+  "artifact_id": 9369543457,
+  "artifact_url": "https://github.com/GitrnHub/Video-to-WEBP-Animated/actions/runs/32264336289/artifacts/9369543457",
   "source_profile": "https://x.com/ylslnm",
-  "method": "current-nitter-index-plus-restid",
+  "method": "nitter-rss-index-plus-restid",
   "status_count": 0,
   "item_failures": 0,
   "download_outcome": "failure",
   "download_exit_code": 30,
   "media_files": 0,
   "total_media_bytes": 0,
-  "artifact_name": "x-profile-ylslnm-nitter-current"
+  "artifact_name": "x-profile-ylslnm-rss-index"
 }
