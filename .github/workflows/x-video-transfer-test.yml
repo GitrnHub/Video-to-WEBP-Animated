@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip gallery-dl requests
           gallery-dl --version | tee gallery-dl-version.txt
 
-      - name: Enumerate current Nitter mirrors and download X media
+      - name: Enumerate Nitter RSS and download X media
         id: download
         continue-on-error: true
         shell: bash
@@ -39,55 +39,41 @@ jobs:
           from pathlib import Path
           import requests
 
-          handle = 'ylslnm'
-          candidates = [
-              'https://lightbrd.com',
-              'https://nitter.space',
-              'https://nitter.us.catsarch.com',
-              'https://nitter.privacyredirect.com',
-              'https://nitter.tiekoetter.com',
-              'https://nuku.trabun.org',
-              'https://nitter.kareem.one',
-              'https://xcancel.com',
-              'https://nitter.poast.org',
-              'https://nitter.net',
+          handle='ylslnm'
+          candidates=[
+            'https://lightbrd.com','https://nitter.space','https://nitter.us.catsarch.com',
+            'https://nitter.privacyredirect.com','https://nitter.tiekoetter.com','https://nuku.trabun.org',
+            'https://nitter.kareem.one','https://xcancel.com','https://nitter.poast.org','https://nitter.net'
           ]
-          paths = [f'/{handle}/media', f'/{handle}']
-          headers = {
-              'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.8',
-          }
-          s = requests.Session(); s.headers.update(headers)
+          paths=[f'/{handle}/rss',f'/{handle}/media',f'/{handle}']
+          headers={'User-Agent':'Mozilla/5.0 (compatible; feed-reader/1.0; +https://github.com/)','Accept':'application/rss+xml,application/xml,text/xml,text/html;q=0.8,*/*;q=0.5'}
+          s=requests.Session(); s.headers.update(headers)
           ids=[]; seen=set(); attempts=[]; selected=None; file_idx=0
           for base in candidates:
-              for path in paths:
-                  url=base+path
-                  try:
-                      r=s.get(url, timeout=25, allow_redirects=True)
-                      text=r.text
-                      Path(f'nitter-pages/{file_idx}.html').write_text(text, encoding='utf-8', errors='replace')
-                      file_idx += 1
-                      found=re.findall(rf'/{re.escape(handle)}/status/(\d+)', text, re.I)
-                      found += re.findall(r'/i/status/(\d+)', text, re.I)
-                      local=[]; local_seen=set()
-                      for tid in found:
-                          if tid not in local_seen:
-                              local_seen.add(tid); local.append(tid)
-                      title=''
-                      mt=re.search(r'<title[^>]*>(.*?)</title>', text, re.I|re.S)
-                      if mt: title=re.sub(r'\s+',' ',mt.group(1)).strip()[:160]
-                      attempts.append({'base':base,'path':path,'status':r.status_code,'bytes':len(r.content),'ids':len(local),'title':title,'final_url':r.url})
-                      if r.status_code == 200 and local:
-                          selected=url
-                          for tid in local:
-                              if tid not in seen:
-                                  seen.add(tid); ids.append(tid)
-                              if len(ids)>=20: break
-                          if ids: break
-                  except Exception as e:
-                      attempts.append({'base':base,'path':path,'error':repr(e)})
-              if ids: break
+            for path in paths:
+              url=base+path
+              try:
+                r=s.get(url,timeout=25,allow_redirects=True)
+                text=r.text
+                Path(f'nitter-pages/{file_idx}.txt').write_text(text,encoding='utf-8',errors='replace'); file_idx+=1
+                found=re.findall(rf'/{re.escape(handle)}/status/(\d+)',text,re.I)
+                found+=re.findall(r'/i/status/(\d+)',text,re.I)
+                local=[]; local_seen=set()
+                for tid in found:
+                  if tid not in local_seen: local_seen.add(tid); local.append(tid)
+                title=''
+                mt=re.search(r'<title[^>]*>(.*?)</title>',text,re.I|re.S)
+                if mt: title=re.sub(r'\s+',' ',mt.group(1)).strip()[:160]
+                attempts.append({'base':base,'path':path,'status':r.status_code,'bytes':len(r.content),'ids':len(local),'content_type':r.headers.get('content-type',''),'title':title,'final_url':r.url})
+                if r.status_code==200 and local:
+                  selected=url
+                  for tid in local:
+                    if tid not in seen: seen.add(tid); ids.append(tid)
+                    if len(ids)>=20: break
+                  if ids: break
+              except Exception as e:
+                attempts.append({'base':base,'path':path,'error':repr(e)})
+            if ids: break
           Path('nitter-attempts.json').write_text(json.dumps({'selected':selected,'attempts':attempts,'ids':ids},ensure_ascii=False,indent=2),encoding='utf-8')
           Path('status-ids.txt').write_text('\n'.join(ids)+('\n' if ids else ''),encoding='utf-8')
           print(json.dumps({'selected':selected,'status_count':len(ids),'attempts':attempts},ensure_ascii=False))
@@ -125,10 +111,8 @@ jobs:
             while IFS= read -r ID; do
               [ -n "$ID" ] || continue
               echo "===== $ID =====" >> gallery-dl.log
-              gallery-dl --verbose --no-input --config gallery-dl.conf --write-metadata \
-                "https://x.com/i/web/status/$ID" >> gallery-dl.log 2>&1
-              RC=$?
-              [ "$RC" -eq 0 ] || ITEM_FAILURES=$((ITEM_FAILURES + 1))
+              gallery-dl --verbose --no-input --config gallery-dl.conf --write-metadata "https://x.com/i/web/status/$ID" >> gallery-dl.log 2>&1
+              RC=$?; [ "$RC" -eq 0 ] || ITEM_FAILURES=$((ITEM_FAILURES+1))
             done < status-ids.txt
           fi
 
@@ -137,14 +121,9 @@ jobs:
           TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
           find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
           if [ "$ENUM_RC" -ne 0 ]; then FINAL_RC=$ENUM_RC; elif [ "$COUNT" -eq 0 ]; then FINAL_RC=31; else FINAL_RC=0; fi
-          echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV"
-          echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV"
-          echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV"
-          echo "media_files=$COUNT" >> "$GITHUB_ENV"
-          echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
-          cat nitter-attempts.json 2>/dev/null || true
-          tail -n 160 gallery-dl.log 2>/dev/null || true
-          cat batch-manifest.txt 2>/dev/null || true
+          echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV"; echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV"
+          echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV"; echo "media_files=$COUNT" >> "$GITHUB_ENV"; echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
+          cat nitter-attempts.json 2>/dev/null || true; tail -n 160 gallery-dl.log 2>/dev/null || true; cat batch-manifest.txt 2>/dev/null || true
           exit "$FINAL_RC"
 
       - name: Upload batch artifact and diagnostics
@@ -152,7 +131,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: x-profile-ylslnm-nitter-current
+          name: x-profile-ylslnm-rss-index
           path: |
             downloads/
             nitter-pages/
@@ -175,12 +154,7 @@ jobs:
           DL_OUTCOME: ${{ steps.download.outcome }}
         run: |
           set -euo pipefail
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "current-nitter-index-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-nitter-current"\n}\n' \
-            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" \
-            "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" \
-            "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add x-transfer-result.json
-          git commit -m 'Record X profile batch transfer metadata' || true
-          git push origin HEAD:x-video-transfer-test
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "nitter-rss-index-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-rss-index"\n}\n' \
+            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add x-transfer-result.json; git commit -m 'Record X profile batch transfer metadata' || true; git push origin HEAD:x-video-transfer-test
