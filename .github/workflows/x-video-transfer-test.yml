@@ -1,4 +1,4 @@
-name: X video transfer test
+name: X profile batch transfer
 
 on:
   push:
@@ -13,49 +13,74 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Check out transfer branch
         uses: actions/checkout@v4
         with:
           ref: x-video-transfer-test
 
-      - name: Download X video
+      - name: Install gallery-dl
+        run: |
+          python -m pip install --upgrade pip gallery-dl
+          gallery-dl --version
+
+      - name: Download recent X profile media
         shell: bash
         run: |
           set -euo pipefail
-          URL='https://video.twimg.com/amplify_video/2089615748977328128/vid/avc1/1080x1920/g6_SC6bOevPNQ_pR.mp4'
-          OUT='x-video-2089615748977328128.mp4'
-          curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 \
-            --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36' \
-            --output "$OUT" "$URL"
-          test -s "$OUT"
-          file "$OUT"
-          sha256sum "$OUT"
-          ls -lh "$OUT"
+          rm -rf downloads
+          mkdir -p downloads
+          cat > gallery-dl.conf <<'JSON'
+          {
+            "extractor": {
+              "base-directory": "downloads",
+              "twitter": {
+                "include": ["media"],
+                "retweets": false,
+                "replies": false,
+                "quoted": false,
+                "pinned": false,
+                "videos": true,
+                "logout": true,
+                "ratelimit": "wait:60",
+                "sleep-request": "1.0-2.5",
+                "filename": "{tweet_id}_{num}.{extension}",
+                "directory": ["ylslnm"]
+              }
+            }
+          }
+          JSON
+          gallery-dl --no-input --config gallery-dl.conf --post-range 1-20 --write-metadata "https://x.com/ylslnm/media"
+          COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
+          test "$COUNT" -gt 0
+          find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
+          echo "media_files=$COUNT" >> "$GITHUB_ENV"
+          echo "total_bytes=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')" >> "$GITHUB_ENV"
+          cat batch-manifest.txt
 
-      - name: Upload video artifact
+      - name: Upload batch artifact
         id: artifact
         uses: actions/upload-artifact@v7
         with:
-          name: x-video-2089615748977328128
-          path: x-video-2089615748977328128.mp4
+          name: x-profile-ylslnm-latest20
+          path: |
+            downloads/
+            batch-manifest.txt
           if-no-files-found: error
           retention-days: 1
 
-      - name: Publish transfer metadata
+      - name: Publish batch metadata
         shell: bash
         env:
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
           ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
         run: |
           set -euo pipefail
-          SIZE=$(stat -c %s x-video-2089615748977328128.mp4)
-          SHA256=$(sha256sum x-video-2089615748977328128.mp4 | awk '{print $1}')
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_status_id": "2089615748977328128",\n  "file_name": "x-video-2089615748977328128.mp4",\n  "size_bytes": %s,\n  "sha256": "%s"\n}\n' \
-            '${{ github.run_id }}' "$ARTIFACT_ID" "$ARTIFACT_URL" "$SIZE" "$SHA256" > x-transfer-result.json
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "post_range": "1-20",\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-latest20"\n}\n' \
+            '${{ github.run_id }}' "$ARTIFACT_ID" "$ARTIFACT_URL" "$media_files" "$total_bytes" > x-transfer-result.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add x-transfer-result.json
-          git commit -m 'Record X video transfer artifact metadata'
+          git commit -m 'Record X profile batch transfer metadata'
           git push origin HEAD:x-video-transfer-test
