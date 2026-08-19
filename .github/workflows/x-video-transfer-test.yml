@@ -23,12 +23,14 @@ jobs:
       - name: Install gallery-dl
         run: |
           python -m pip install --upgrade pip gallery-dl
-          gallery-dl --version
+          gallery-dl --version | tee gallery-dl-version.txt
 
       - name: Download recent X profile media
+        id: download
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           rm -rf downloads
           mkdir -p downloads
           cat > gallery-dl.conf <<'JSON'
@@ -51,36 +53,52 @@ jobs:
             }
           }
           JSON
-          gallery-dl --no-input --config gallery-dl.conf --post-range 1-20 --write-metadata "https://x.com/ylslnm/media"
+          gallery-dl --verbose --no-input --config gallery-dl.conf --post-range 1-20 --write-metadata "https://x.com/ylslnm/media" > gallery-dl.log 2>&1
+          RC=$?
           COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
-          test "$COUNT" -gt 0
+          TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
           find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
+          echo "download_rc=$RC" >> "$GITHUB_ENV"
           echo "media_files=$COUNT" >> "$GITHUB_ENV"
-          echo "total_bytes=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')" >> "$GITHUB_ENV"
-          cat batch-manifest.txt
+          echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
+          echo "media_files=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "total_bytes=$TOTAL" >> "$GITHUB_OUTPUT"
+          tail -n 120 gallery-dl.log || true
+          cat batch-manifest.txt || true
+          exit "$RC"
 
-      - name: Upload batch artifact
+      - name: Upload batch artifact and diagnostics
         id: artifact
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: x-profile-ylslnm-latest20
           path: |
             downloads/
             batch-manifest.txt
+            gallery-dl.log
+            gallery-dl-version.txt
+            gallery-dl.conf
           if-no-files-found: error
           retention-days: 1
 
       - name: Publish batch metadata
+        if: always()
         shell: bash
         env:
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
           ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+          DL_OUTCOME: ${{ steps.download.outcome }}
         run: |
           set -euo pipefail
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "post_range": "1-20",\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-latest20"\n}\n' \
-            '${{ github.run_id }}' "$ARTIFACT_ID" "$ARTIFACT_URL" "$media_files" "$total_bytes" > x-transfer-result.json
+          DL_RC="${download_rc:-999}"
+          COUNT="${media_files:-0}"
+          TOTAL="${total_bytes:-0}"
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "post_range": "1-20",\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-latest20"\n}\n' \
+            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "$DL_OUTCOME" "$DL_RC" "$COUNT" "$TOTAL" > x-transfer-result.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add x-transfer-result.json
-          git commit -m 'Record X profile batch transfer metadata'
+          git commit -m 'Record X profile batch transfer metadata' || true
           git push origin HEAD:x-video-transfer-test
