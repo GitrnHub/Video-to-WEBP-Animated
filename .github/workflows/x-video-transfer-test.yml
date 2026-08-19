@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - x-video-transfer-test
+    paths:
+      - .github/workflows/x-video-transfer-test.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   fetch:
@@ -28,9 +30,27 @@ jobs:
           ls -lh "$OUT"
 
       - name: Upload video artifact
+        id: artifact
         uses: actions/upload-artifact@v7
         with:
           name: x-video-2089615748977328128
           path: x-video-2089615748977328128.mp4
           if-no-files-found: error
           retention-days: 1
+
+      - name: Publish transfer metadata
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          SIZE=$(stat -c %s x-video-2089615748977328128.mp4)
+          SHA256=$(sha256sum x-video-2089615748977328128.mp4 | awk '{print $1}')
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_status_id": "2089615748977328128",\n  "file_name": "x-video-2089615748977328128.mp4",\n  "size_bytes": %s,\n  "sha256": "%s"\n}\n' \
+            '${{ github.run_id }}' "$ARTIFACT_ID" "$ARTIFACT_URL" "$SIZE" "$SHA256" > x-transfer-result.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add x-transfer-result.json
+          git commit -m 'Record X video transfer artifact metadata' || true
+          git push origin HEAD:x-video-transfer-test
