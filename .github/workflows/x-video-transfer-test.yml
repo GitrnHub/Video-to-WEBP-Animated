@@ -13,7 +13,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out transfer branch
         uses: actions/checkout@v4
@@ -25,14 +25,30 @@ jobs:
           python -m pip install --upgrade pip gallery-dl
           gallery-dl --version | tee gallery-dl-version.txt
 
-      - name: Download recent X posts via UserTweets
+      - name: Enumerate public posts and download media
         id: download
         continue-on-error: true
         shell: bash
         run: |
           set +e
           rm -rf downloads
-          mkdir -p downloads
+          mkdir -p downloads/ylslnm
+          : > gallery-dl.log
+
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+            --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36' \
+            'https://twstalker.com/ylslnm' -o profile-index.html
+          INDEX_RC=$?
+
+          if [ "$INDEX_RC" -eq 0 ]; then
+            grep -oE '/ylslnm/status/[0-9]+' profile-index.html \
+              | sed -E 's#^.*/status/##' \
+              | awk '!seen[$0]++' \
+              | head -n 20 > status-ids.txt
+          else
+            : > status-ids.txt
+          fi
+
           cat > gallery-dl.conf <<'JSON'
           {
             "extractor": {
@@ -43,40 +59,69 @@ jobs:
                 "quoted": false,
                 "text-tweets": false,
                 "videos": true,
+                "unavailable": true,
+                "tweet-endpoint": "restid",
                 "logout": true,
                 "ratelimit": "wait:60",
-                "sleep-request": "1.0-2.5",
+                "sleep-request": "0.8-1.8",
                 "filename": "{tweet_id}_{num}.{extension}",
                 "directory": ["ylslnm"]
               }
             }
           }
           JSON
-          TARGET='https://x.com/ylslnm/tweets'
-          gallery-dl --verbose --no-input --config gallery-dl.conf --post-range 1-30 --write-metadata "$TARGET" > gallery-dl.log 2>&1
-          RC=$?
+
+          STATUS_COUNT=$(wc -l < status-ids.txt | tr -d ' ')
+          echo "Enumerated status IDs: $STATUS_COUNT" | tee -a gallery-dl.log
+
+          ITEM_FAILURES=0
+          while IFS= read -r ID; do
+            [ -n "$ID" ] || continue
+            echo "===== $ID =====" >> gallery-dl.log
+            gallery-dl --verbose --no-input --config gallery-dl.conf --write-metadata \
+              "https://x.com/i/web/status/$ID" >> gallery-dl.log 2>&1
+            RC=$?
+            if [ "$RC" -ne 0 ]; then
+              ITEM_FAILURES=$((ITEM_FAILURES + 1))
+            fi
+          done < status-ids.txt
+
           COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
           TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
           find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
-          echo "download_rc=$RC" >> "$GITHUB_ENV"
+
+          if [ "$STATUS_COUNT" -eq 0 ]; then
+            FINAL_RC=30
+          elif [ "$COUNT" -eq 0 ]; then
+            FINAL_RC=31
+          else
+            FINAL_RC=0
+          fi
+
+          echo "index_rc=$INDEX_RC" >> "$GITHUB_ENV"
+          echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV"
+          echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV"
+          echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV"
           echo "media_files=$COUNT" >> "$GITHUB_ENV"
           echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
-          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
           echo "media_files=$COUNT" >> "$GITHUB_OUTPUT"
           echo "total_bytes=$TOTAL" >> "$GITHUB_OUTPUT"
-          tail -n 120 gallery-dl.log || true
+
+          tail -n 160 gallery-dl.log || true
+          cat status-ids.txt || true
           cat batch-manifest.txt || true
-          exit "$RC"
+          exit "$FINAL_RC"
 
       - name: Upload batch artifact and diagnostics
         id: artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: x-profile-ylslnm-usertweets
+          name: x-profile-ylslnm-latest20-indexed
           path: |
             downloads/
             batch-manifest.txt
+            status-ids.txt
             gallery-dl.log
             gallery-dl-version.txt
             gallery-dl.conf
@@ -92,11 +137,10 @@ jobs:
           DL_OUTCOME: ${{ steps.download.outcome }}
         run: |
           set -euo pipefail
-          DL_RC="${download_rc:-999}"
-          COUNT="${media_files:-0}"
-          TOTAL="${total_bytes:-0}"
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "UserTweets",\n  "post_range": "1-30",\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-usertweets"\n}\n' \
-            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "$DL_OUTCOME" "$DL_RC" "$COUNT" "$TOTAL" > x-transfer-result.json
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "public-index-plus-TweetResultByRestId",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-latest20-indexed"\n}\n' \
+            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" \
+            "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" \
+            "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add x-transfer-result.json
