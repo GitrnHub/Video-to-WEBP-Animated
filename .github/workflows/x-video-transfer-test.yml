@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip gallery-dl
           gallery-dl --version | tee gallery-dl-version.txt
 
-      - name: Download recent X profile media via search
+      - name: Download recent X posts via UserTweets
         id: download
         continue-on-error: true
         shell: bash
@@ -41,20 +41,19 @@ jobs:
                 "retweets": false,
                 "replies": false,
                 "quoted": false,
+                "text-tweets": false,
                 "videos": true,
                 "logout": true,
                 "ratelimit": "wait:60",
                 "sleep-request": "1.0-2.5",
-                "search-results": "media",
-                "search-stop": 1,
                 "filename": "{tweet_id}_{num}.{extension}",
                 "directory": ["ylslnm"]
               }
             }
           }
           JSON
-          TARGET='https://x.com/search?q=from%3Aylslnm%20filter%3Amedia&f=live'
-          gallery-dl --verbose --no-input --config gallery-dl.conf --post-range 1-20 --write-metadata "$TARGET" > gallery-dl.log 2>&1
+          TARGET='https://x.com/ylslnm/tweets'
+          gallery-dl --verbose --no-input --config gallery-dl.conf --post-range 1-30 --write-metadata "$TARGET" > gallery-dl.log 2>&1
           RC=$?
           COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
           TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
@@ -74,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: x-profile-ylslnm-latest20-search
+          name: x-profile-ylslnm-usertweets
           path: |
             downloads/
             batch-manifest.txt
@@ -96,7 +95,7 @@ jobs:
           DL_RC="${download_rc:-999}"
           COUNT="${media_files:-0}"
           TOTAL="${total_bytes:-0}"
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "search:from-filter-media",\n  "post_range": "1-20",\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-latest20-search"\n}\n' \
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "UserTweets",\n  "post_range": "1-30",\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-usertweets"\n}\n' \
             '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "$DL_OUTCOME" "$DL_RC" "$COUNT" "$TOTAL" > x-transfer-result.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
