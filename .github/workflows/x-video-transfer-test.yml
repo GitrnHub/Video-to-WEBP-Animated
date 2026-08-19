@@ -13,14 +13,19 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out transfer branch
         uses: actions/checkout@v4
         with:
           ref: x-video-transfer-test
 
-      - name: Download public X profile media from syndication timeline
+      - name: Install gallery-dl
+        run: |
+          python -m pip install --upgrade pip gallery-dl requests
+          gallery-dl --version | tee gallery-dl-version.txt
+
+      - name: Enumerate X embed timeline and download media
         id: download
         continue-on-error: true
         shell: bash
@@ -29,148 +34,157 @@ jobs:
           rm -rf downloads
           mkdir -p downloads/ylslnm
 
-          cat > fetch_syndication.py <<'PY'
-          import json, re, sys, os
+          cat > enumerate_timeline.py <<'PY'
+          import json, random, re, time
           from pathlib import Path
-          from urllib.parse import urlparse
           import requests
 
-          HANDLE = 'ylslnm'
-          PROFILE = f'https://syndication.twitter.com/srv/timeline-profile/screen-name/{HANDLE}'
-          OUT = Path('downloads') / HANDLE
-          OUT.mkdir(parents=True, exist_ok=True)
-          UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36'
-          s = requests.Session()
-          s.headers.update({'User-Agent': UA, 'Accept': '*/*'})
-
-          r = s.get(PROFILE, timeout=60)
-          Path('syndication-status.txt').write_text(f'HTTP {r.status_code}\nbytes={len(r.content)}\n', encoding='utf-8')
-          r.raise_for_status()
-          html = r.text
-          m = re.search(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html, re.S)
-          if not m:
-              raise RuntimeError('__NEXT_DATA__ not found')
-          data = json.loads(m.group(1))
-          page = data.get('props', {}).get('pageProps', {})
-          timeline = page.get('timeline') or {}
-          entries = timeline.get('entries') or []
-          context = page.get('contextProvider') or {}
-          summary = {
-              'hasResults': context.get('hasResults'),
-              'entry_count': len(entries),
-              'latest_tweet_id': page.get('latest_tweet_id'),
+          handle = 'ylslnm'
+          callback = f'__twttr.callbacks.tl_i0_profile_{handle}_old'
+          params = {
+              'callback': callback,
+              'dnt': 'true',
+              'domain': f'embed-{random.randint(100000,999999)}.example.com',
+              'lang': 'en',
+              'screen_name': handle,
+              'suppress_response_codes': 'true',
+              't': str(int(time.time())),
+              'tz': 'GMT-0100',
+              'with_replies': 'false',
           }
-          Path('syndication-summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
-
-          downloads = []
-          seen_urls = set()
-
-          def add_url(tweet_id, num, url, kind, created_at=None):
-              if not url or url in seen_urls:
-                  return
-              seen_urls.add(url)
-              clean = url.split('?')[0]
-              ext = os.path.splitext(urlparse(clean).path)[1].lower()
-              if not ext or len(ext) > 5:
-                  ext = '.mp4' if kind in ('video', 'animated_gif') else '.jpg'
-              name = f'{tweet_id}_{num}{ext}'
-              path = OUT / name
-              with s.get(url, stream=True, timeout=120) as rr:
-                  rr.raise_for_status()
-                  with path.open('wb') as f:
-                      for chunk in rr.iter_content(1024 * 1024):
-                          if chunk:
-                              f.write(chunk)
-              downloads.append({
-                  'tweet_id': str(tweet_id),
-                  'kind': kind,
-                  'created_at': created_at,
-                  'file': str(path),
-                  'size': path.stat().st_size,
-                  'source_url': url,
-                  'tweet_url': f'https://x.com/{HANDLE}/status/{tweet_id}',
-              })
-
-          tweet_count = 0
-          for entry in entries:
-              if entry.get('type') != 'tweet':
-                  continue
-              tweet = (entry.get('content') or {}).get('tweet') or {}
-              tid = str(tweet.get('id_str') or tweet.get('id') or '')
-              if not tid:
-                  continue
-              tweet_count += 1
-              if tweet_count > 20:
-                  break
-              created = tweet.get('created_at')
-              num = 0
-              details = tweet.get('mediaDetails') or []
-              for media in details:
-                  kind = media.get('type')
-                  if kind == 'photo':
-                      url = media.get('media_url_https') or media.get('url')
-                      if url and 'name=' not in url:
-                          url += '?name=orig'
-                      num += 1
-                      add_url(tid, num, url, 'photo', created)
-                  elif kind in ('video', 'animated_gif'):
-                      variants = ((media.get('video_info') or {}).get('variants') or [])
-                      mp4 = [v for v in variants if v.get('content_type') == 'video/mp4' and v.get('url')]
-                      if mp4:
-                          best = max(mp4, key=lambda v: int(v.get('bitrate') or 0))
-                          num += 1
-                          add_url(tid, num, best['url'], kind, created)
-
-              if not details:
-                  video = tweet.get('video') or {}
-                  variants = video.get('variants') or []
-                  mp4 = [v for v in variants if (v.get('type') == 'video/mp4' or str(v.get('src','')).split('?')[0].endswith('.mp4')) and v.get('src')]
-                  if mp4:
-                      best = max(mp4, key=lambda v: len(v.get('src','')))
-                      num += 1
-                      add_url(tid, num, best['src'], 'video', created)
-                  for photo in tweet.get('photos') or []:
-                      url = photo.get('url')
-                      if url:
-                          num += 1
-                          add_url(tid, num, url, 'photo', created)
-
-          Path('tweet-manifest.json').write_text(json.dumps(downloads, ensure_ascii=False, indent=2), encoding='utf-8')
-          with Path('batch-manifest.txt').open('w', encoding='utf-8') as f:
-              for item in downloads:
-                  f.write(f"{item['file']}\t{item['size']} bytes\t{item['tweet_url']}\n")
-          print(json.dumps({'tweets_scanned': tweet_count, 'media_files': len(downloads), 'total_bytes': sum(x['size'] for x in downloads)}, ensure_ascii=False))
-          if not downloads:
-              sys.exit(31)
+          headers = {
+              'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136.0 Safari/537.36',
+              'Accept': '*/*',
+              'Referer': 'https://platform.twitter.com/',
+          }
+          url = 'https://cdn.syndication.twimg.com/timeline/profile'
+          r = requests.get(url, params=params, headers=headers, timeout=90)
+          Path('old-timeline-status.txt').write_text(
+              f'HTTP {r.status_code}\nbytes={len(r.content)}\ncontent_type={r.headers.get("content-type", "")}\nfinal_url={r.url}\n',
+              encoding='utf-8')
+          Path('old-timeline-response.txt').write_text(r.text, encoding='utf-8', errors='replace')
+          r.raise_for_status()
+          text = r.text.strip()
+          m = re.match(r'^[^(]+\((.*)\)\s*;?\s*$', text, re.S)
+          if not m:
+              raise RuntimeError('JSONP wrapper not recognized')
+          payload = json.loads(m.group(1))
+          body = payload.get('body') or ''
+          Path('old-timeline-body.html').write_text(body, encoding='utf-8', errors='replace')
+          ids = []
+          seen = set()
+          patterns = [
+              rf'/{re.escape(handle)}/status/(\d+)',
+              r'data-tweet-id=["\'](\d+)["\']',
+              r'data-item-id=["\'](\d+)["\']',
+              r'/i/web/status/(\d+)',
+          ]
+          for pattern in patterns:
+              for tid in re.findall(pattern, body, re.I):
+                  if tid not in seen:
+                      seen.add(tid)
+                      ids.append(tid)
+          ids = ids[:20]
+          Path('status-ids.txt').write_text('\n'.join(ids) + ('\n' if ids else ''), encoding='utf-8')
+          summary = {
+              'http_status': r.status_code,
+              'payload_keys': sorted(payload.keys()),
+              'body_bytes': len(body.encode('utf-8')),
+              'status_count': len(ids),
+              'status_ids': ids,
+          }
+          Path('old-timeline-summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+          print(json.dumps(summary, ensure_ascii=False))
+          if not ids:
+              raise SystemExit(30)
           PY
 
-          python fetch_syndication.py > syndication-fetch.log 2>&1
-          RC=$?
-          COUNT=$(find downloads -type f | wc -l | tr -d ' ')
-          TOTAL=$(find downloads -type f -printf '%s\n' | awk '{s+=$1} END{print s+0}')
-          echo "download_rc=$RC" >> "$GITHUB_ENV"
+          python enumerate_timeline.py > enumerate.log 2>&1
+          ENUM_RC=$?
+
+          cat > gallery-dl.conf <<'JSON'
+          {
+            "extractor": {
+              "base-directory": "downloads",
+              "twitter": {
+                "retweets": false,
+                "replies": false,
+                "quoted": false,
+                "text-tweets": false,
+                "videos": true,
+                "unavailable": true,
+                "tweet-endpoint": "restid",
+                "logout": true,
+                "ratelimit": "wait:60",
+                "sleep-request": "0.8-1.8",
+                "filename": "{tweet_id}_{num}.{extension}",
+                "directory": ["ylslnm"]
+              }
+            }
+          }
+          JSON
+
+          ITEM_FAILURES=0
+          : > gallery-dl.log
+          if [ "$ENUM_RC" -eq 0 ]; then
+            while IFS= read -r ID; do
+              [ -n "$ID" ] || continue
+              echo "===== $ID =====" >> gallery-dl.log
+              gallery-dl --verbose --no-input --config gallery-dl.conf --write-metadata \
+                "https://x.com/i/web/status/$ID" >> gallery-dl.log 2>&1
+              RC=$?
+              if [ "$RC" -ne 0 ]; then
+                ITEM_FAILURES=$((ITEM_FAILURES + 1))
+              fi
+            done < status-ids.txt
+          fi
+
+          STATUS_COUNT=$(wc -l < status-ids.txt 2>/dev/null | tr -d ' ')
+          STATUS_COUNT=${STATUS_COUNT:-0}
+          COUNT=$(find downloads -type f ! -name '*.json' | wc -l | tr -d ' ')
+          TOTAL=$(find downloads -type f ! -name '*.json' -printf '%s\n' | awk '{s+=$1} END{print s+0}')
+          find downloads -type f -printf '%P\t%s bytes\n' | sort > batch-manifest.txt
+
+          if [ "$ENUM_RC" -ne 0 ]; then
+            FINAL_RC=$ENUM_RC
+          elif [ "$COUNT" -eq 0 ]; then
+            FINAL_RC=31
+          else
+            FINAL_RC=0
+          fi
+
+          echo "enum_rc=$ENUM_RC" >> "$GITHUB_ENV"
+          echo "status_count=$STATUS_COUNT" >> "$GITHUB_ENV"
+          echo "item_failures=$ITEM_FAILURES" >> "$GITHUB_ENV"
+          echo "download_rc=$FINAL_RC" >> "$GITHUB_ENV"
           echo "media_files=$COUNT" >> "$GITHUB_ENV"
           echo "total_bytes=$TOTAL" >> "$GITHUB_ENV"
-          cat syndication-status.txt 2>/dev/null || true
-          cat syndication-summary.json 2>/dev/null || true
-          cat syndication-fetch.log 2>/dev/null || true
+
+          cat old-timeline-status.txt 2>/dev/null || true
+          cat old-timeline-summary.json 2>/dev/null || true
+          tail -n 100 enumerate.log 2>/dev/null || true
+          tail -n 160 gallery-dl.log 2>/dev/null || true
           cat batch-manifest.txt 2>/dev/null || true
-          exit "$RC"
+          exit "$FINAL_RC"
 
       - name: Upload batch artifact and diagnostics
         id: artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: x-profile-ylslnm-syndication
+          name: x-profile-ylslnm-cdn-timeline
           path: |
             downloads/
             batch-manifest.txt
-            tweet-manifest.json
-            syndication-status.txt
-            syndication-summary.json
-            syndication-fetch.log
-            fetch_syndication.py
+            status-ids.txt
+            old-timeline-status.txt
+            old-timeline-summary.json
+            old-timeline-response.txt
+            old-timeline-body.html
+            enumerate.log
+            gallery-dl.log
+            gallery-dl-version.txt
+            gallery-dl.conf
           if-no-files-found: error
           retention-days: 1
 
@@ -183,9 +197,10 @@ jobs:
           DL_OUTCOME: ${{ steps.download.outcome }}
         run: |
           set -euo pipefail
-          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "syndication-profile",\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-syndication"\n}\n' \
-            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" "$DL_OUTCOME" \
-            "${download_rc:-999}" "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
+          printf '{\n  "run_id": %s,\n  "artifact_id": %s,\n  "artifact_url": "%s",\n  "source_profile": "https://x.com/ylslnm",\n  "method": "cdn-syndication-jsonp-plus-restid",\n  "status_count": %s,\n  "item_failures": %s,\n  "download_outcome": "%s",\n  "download_exit_code": %s,\n  "media_files": %s,\n  "total_media_bytes": %s,\n  "artifact_name": "x-profile-ylslnm-cdn-timeline"\n}\n' \
+            '${{ github.run_id }}' "${ARTIFACT_ID:-0}" "${ARTIFACT_URL:-}" \
+            "${status_count:-0}" "${item_failures:-0}" "$DL_OUTCOME" "${download_rc:-999}" \
+            "${media_files:-0}" "${total_bytes:-0}" > x-transfer-result.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add x-transfer-result.json
